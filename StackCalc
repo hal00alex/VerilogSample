@@ -1,0 +1,477 @@
+module top(clk, mode, btns, swtchs, leds, segs, an);
+  input clk;
+  input[1:0] mode;
+//1 is left 0 is right 
+  input[1:0] btns;
+  input[7:0] swtchs;
+  output[7:0] leds;
+  output[6:0] segs;
+  output[3:0] an;
+
+  //might need to change some of these from wires to regs
+  wire cs;
+  wire we;
+  wire[6:0] addr;
+  wire [7:0] data_out_mem;
+  wire [7:0] data_out_ctrl;
+  wire[7:0] data_bus;
+  
+  //MODIFY THE RIGHT HAND SIDE OF THESE TWO STATEMENTS ONLY
+ assign data_bus = we ? data_out_ctrl: 8'bzzzzzzz; // 1st driver of the data bus -- tri state switches,
+   assign data_bus = we ? 8'bzzzzzzz: data_out_mem; // 2nd driver of the data bus -- tri state switches,
+  controller ctrl(clk, cs, we, addr, data_bus, data_out_ctrl, mode, btns, swtchs, leds, segs, an);
+  memory mem(clk, cs, we, addr, data_bus, data_out_mem);
+endmodule
+
+
+module SinglePulser(button, pulsebutton, clk);
+input clk, button;
+reg state;
+output reg pulsebutton;
+initial
+begin
+state<=0;
+end
+always @(posedge clk)
+begin
+if (button==1 && state==0)
+begin
+state<=1;
+pulsebutton<=1;
+end
+else if (button==1 && state==1) 
+begin
+state<=1;
+pulsebutton<=0;
+end
+else 
+begin
+state<=0;
+pulsebutton<=0;
+end
+end
+endmodule
+
+
+///////////////////////////////////////////////////////////////////////////////
+///////////////////////////////////////////////////////////////////////////////
+///////////////////////////////////////////////////////////////////////////////
+///////////////////////////////////////////////////////////////////////////////
+///////////////////////////////////////////////////////////////////////////////
+module memory(clock, cs, we, address, data_in, data_out);
+  //DO NOT MODIFY THIS MODULE
+  input clock;
+  input cs;
+  input we;
+  input[6:0] address;
+  input[7:0] data_in;
+  output[7:0] data_out;
+  reg[7:0] data_out;
+  reg[7:0] RAM[0:127];
+  always @ (negedge clock)
+  begin
+    if((we == 1) && (cs == 1))
+      RAM[address] <= data_in[7:0];
+    data_out <= RAM[address];
+  end
+endmodule
+///////////////////////////////////////////////////////////////////////////////
+///////////////////////////////////////////////////////////////////////////////
+///////////////////////////////////////////////////////////////////////////////
+///////////////////////////////////////////////////////////////////////////////
+///////////////////////////////////////////////////////////////////////////////
+module controller(clk, cs, we, address, data_in, data_out, mode, btns,  swtchs, leds, segs, an);
+                 
+input clk;
+output reg cs;
+output reg we; 
+reg [7:0] value1, value2; 
+output [6:0] address;
+reg [4:0] state; 
+input[7:0] data_in;
+output reg[8:1] data_out;
+input[1:0] mode;
+input[1:0] btns; 
+input[7:0] swtchs;
+output reg [7:0] leds;
+output reg [6:0] segs;
+output reg [3:0] an;
+reg [7:0] DVR, SPR; 
+reg [6:0] DAR; 
+reg [1:0] btnz; 
+reg addsubflag; 
+reg [7:1] seven1, seven2, seven3, seven4;
+reg [2:0] stateCount;
+wire pulse1, pulse2;
+simpleDivider C1(clk, slowCLK2);
+complexDivider C2 (clk, slowCLK); 
+Bounce B1(btns[1], slowCLK, pulse1a); 
+Bounce B2(btns[0], slowCLK, pulse2a);
+SinglePulser S1(pulse1a, pulse1, clk);
+SinglePulser S2(pulse2a, pulse2, clk);
+
+initial 
+begin 
+state <= 0; 
+SPR <= 8'h7F; 
+DAR <= 8'h00; 
+DVR <= 8'h00; 
+end 
+
+assign address = DAR;
+
+always@(posedge clk)
+    begin
+    btnz <= {pulse1, pulse2}; 
+    DVR <= data_in;
+    leds[7] <= (SPR == 8'h7F);
+    leds[6:0] <= DAR[6:0]; 
+
+    case (state)
+    4'b0000: 
+        begin
+        we = 0; cs = 0;
+        case (mode)
+        //Switches 0 for push or pop 
+        2'b00: 
+            begin  
+            state = 4'b0001;
+            end
+         //switches 1 for math
+        2'b01: 
+            begin 
+            state = 4'b0010;
+            end
+        //switches 2 for clear or top     
+        2'b10:
+            begin  
+            state = 4'b0011;
+            end
+        //swtiches 3 for moving
+        2'b11: 
+            begin 
+            state = 4'b0100;
+            end
+        endcase
+        end
+        
+    //push or pop buttons     
+    4'b0001: 
+        begin 
+        //push needs to write 
+        if(btnz[0] == 1 && btnz[1] == 0) 
+            begin 
+            we <= 1; 
+            cs <= 1; 
+            data_out <= swtchs; 
+            DAR = SPR;
+            SPR = SPR - 1;
+            state <= 4'b0000;
+            end
+        //pop
+        else if(btnz[0] == 0 && btnz[1] == 1) 
+            begin 
+            DAR = DAR + 1;
+            SPR = SPR + 1;
+            state <= 0;     
+            end 
+        //safety/wait     
+        else 
+            begin
+            state <= 0;
+            end 
+        end
+        
+    //math
+    4'b0010: 
+        begin 
+        //set up add 
+        if(btnz == 2'b01) 
+            begin
+            addsubflag <= 0;
+            DAR <= SPR + 1;
+            SPR <= SPR + 1;
+            state <= 4'b0101;
+            end   
+        //set up sub 
+        else if(btnz == 2'b10) 
+            begin
+            addsubflag <= 1;
+            DAR <= SPR + 1;
+            SPR <= SPR + 1;
+            state <= 4'b0101;
+            end
+        //safety/wait    
+        else 
+            begin
+            state <= 4'b0000;
+            end
+        end
+        
+    //clear or top buttons        
+    4'b0011: 
+        begin 
+        //top of stack 
+        if(btnz == 2'b01) 
+            begin 
+            DAR <= SPR + 1;
+            state <= 0;
+            end
+        //clear stack
+        else if(btnz == 2'b10) 
+            begin 
+            SPR <= 8'h7F;
+            DAR <= 8'b00;
+            state <= 0;
+            end
+        //safety/wait 
+        else 
+            begin
+            state <= 4'b0000;
+            end
+        end
+     
+    //moving buttons  
+    4'b0100: 
+    begin 
+    //inc
+    if(btnz == 2'b01) 
+        begin
+        DAR <= DAR + 1;
+        state <= 0;
+        end
+    //dec   
+    else if(btnz == 2'b10) 
+        begin
+        DAR <= DAR - 1;
+        state <= 0;
+        end
+    else 
+        begin
+        state <= 0;
+        end
+    end
+    
+    //math pop 1   
+    4'b0101: 
+        begin 
+        value1 <= data_in;
+        DAR <= DAR + 1;
+        state <= 4'b0110;
+        end
+    //math part 2
+    4'b0110: 
+        begin 
+        value2 <= data_in;
+        state <= 4'b0111;
+        end
+        
+    //doing math/push      
+    4'b0111: 
+        begin 
+        we <= 1; 
+        cs <= 1;
+        //add 
+        if(!addsubflag) 
+            begin
+            data_out <= value1 + value2;
+            end
+        //sub    
+        else 
+            begin
+            data_out <= value1 - value2;
+            end
+        state <= 4'b1000;
+        end
+        
+    //wait/idel b/c Parth 
+    4'b1000: 
+        begin
+        state <= 4'b0000;
+        end
+    endcase
+end
+
+//seven segements 
+always @(posedge slowCLK2) 
+begin 
+if (stateCount == 0)
+begin 
+an[0] <= 0; 
+an[1] <= 1; 
+an[2] <= 1; 
+an[3] <= 1; 
+stateCount <= 1;  
+segs <= seven1; 
+end 
+
+else if (stateCount==1)
+begin 
+an[0] <= 1; 
+an[1] <= 0; 
+an[2] <= 1; 
+an[3] <= 1; 
+stateCount <= 2; 
+segs <= seven2; 
+end 
+
+else if (stateCount==2)
+begin 
+an[0] <= 1; 
+an[1] <= 1; 
+an[2] <= 0; 
+an[3] <= 1; 
+stateCount <= 3; 
+segs <= seven3; 
+end 
+else if (stateCount==3)
+begin 
+an[0] <= 1; 
+an[1] <= 1; 
+an[2] <= 1; 
+an[3] <= 0; 
+stateCount <= 0;  
+segs <= seven4; 
+end 
+end 
+
+
+always @(*)
+begin
+seven1=7'b1111111;
+seven2=7'b1111111;
+seven3=7'b1111111;
+seven4=7'b1111111;
+case(DVR[3:0])
+4'h0: seven1<=7'b0000001;
+4'h1: seven1<=7'b1001111;
+4'h2: seven1<=7'b0010010;
+4'h3: seven1<=7'b0000110;
+4'h4: seven1<=7'b1001100;
+4'h5: seven1<=7'b0100100;
+4'h6: seven1<=7'b0100000;
+4'h7: seven1<=7'b0001111;
+4'h8: seven1<=7'b0000000;
+4'h9: seven1<=7'b0000100;
+4'hA: seven1<=7'b0001111;
+4'hB: seven1<=7'b0000000;
+4'hC: seven1<=7'b0110001;
+4'hD: seven1<=7'b0000001;
+4'hE: seven1<=7'b0110000;
+4'hF: seven1<=7'b0111000;
+default: seven1<=7'b1111111;
+endcase
+
+
+case(DVR[7:4])
+4'h0: seven2<=7'b0000001;
+4'h1: seven2<=7'b1001111;
+4'h2: seven2<=7'b0010010;
+4'h3: seven2<=7'b0000110;
+4'h4: seven2<=7'b1001100;
+4'h5: seven2<=7'b0100100;
+4'h6: seven2<=7'b0100000;
+4'h7: seven2<=7'b0001111;
+4'h8: seven2<=7'b0000000;
+4'h9: seven2<=7'b0000100;
+4'hA: seven2<=7'b0001111;
+4'hB: seven2<=7'b0000000;
+4'hC: seven2<=7'b0110001;
+4'hD: seven2<=7'b0000001;
+4'hE: seven2<=7'b0110000;
+4'hF: seven2<=7'b0111000;
+default: seven2<=7'b1111111; 
+endcase
+end
+endmodule
+
+///////////////////////////////////////////////////////////////////////////////
+///////////////////////////////////////////////////////////////////////////////
+///////////////////////////////////////////////////////////////////////////////
+///////////////////////////////////////////////////////////////////////////////
+///////////////////////////////////////////////////////////////////////////////
+module DFF(D, CLK, Q, Qp);
+input D, CLK;
+output reg Q, Qp;
+initial
+  begin
+    Q <= 0;
+    Qp <= 1;
+  end
+
+always@(posedge CLK)
+  begin
+    Q <= D;
+    Qp <= ~D;
+  end
+endmodule
+
+module Bounce (Contact, clk, OUT);
+input Contact;
+input clk;
+output reg OUT;
+wire Q1, Q1p, Q2, Q2p, Q3, Q3p;
+
+DFF D1(Contact, clk, Q1, Q1p);
+DFF D2(Q1, clk, Q2, Q2p);
+DFF D3(Q2, clk, Q3, Q3p);
+always @(posedge clk)
+begin
+ OUT <= Q3p & Q2;
+end
+endmodule
+
+module simpleDivider(clk100Mhz, slowClk);
+  input clk100Mhz; //fast clock
+  output slowClk; //slow clock
+  reg[17:0] counter;
+  assign slowClk= counter[17];  //(2^27 / 100E6) = 1.34seconds
+  initial begin
+    counter = 0;
+  end
+  always @ (posedge clk100Mhz)
+  begin
+   counter <= counter + 1; //increment the counter every 10ns (1/100 Mhz) cycle.
+  end
+endmodule
+
+module simpleDivider3(clk100Mhz, slowClk);
+  input clk100Mhz; //fast clock
+  output slowClk; //slow clock
+  reg[20:0] counter;
+  assign slowClk= counter[20];  //(2^27 / 100E6) = 1.34seconds
+  initial begin
+    counter = 0;
+  end
+  always @ (posedge clk100Mhz)
+  begin
+   counter <= counter + 1; //increment the counter every 10ns (1/100 Mhz) cycle.
+  end
+endmodule
+
+module complexDivider(clk100Mhz, slowClk);
+  input clk100Mhz; //fast clock
+  output reg slowClk; //slow clock
+
+  reg[27:0] counter;
+
+  initial begin
+    counter = 0;
+    slowClk = 0;
+  end
+
+  always @ (posedge clk100Mhz)
+  begin
+    if(counter == 100000) begin
+      counter <= 1;
+      slowClk <= ~slowClk;
+    end
+    else begin
+      counter <= counter + 1;
+    end
+  end
+
+endmodule
+
+
+
